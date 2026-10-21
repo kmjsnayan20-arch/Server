@@ -870,113 +870,117 @@ def clear_devices():
 # ======================
 # NEW REGISTRATION WEBHOOK (Para sa @KazeRegisterBot)
 # ======================
+import threading
+
+def process_telegram_update(data):
+    """Background worker para hindi ma-delay o ma-timeout ang Telegram webhook response"""
+    try:
+        if "message" in data:
+            msg = data["message"]
+            msg_text = msg.get("text", "")
+            chat_id = msg["chat"]["id"]
+            user_info = msg.get("from", {})
+            
+            username = user_info.get("username")
+            user_id = user_info.get("id")
+            
+            if username:
+                telegram_identifier = f"@{username}"
+                display_username = f"@{username}"
+            else:
+                telegram_identifier = f"tg://openmessage?user_id={user_id}"
+                display_username = f"ID: {user_id}"
+
+            if msg_text.startswith("/start"):
+                parts = msg_text.split(" ")
+                if len(parts) > 1:
+                    device_id = parts[1].strip()
+                    db_type = 'injector'
+                    total_count = 1
+                    
+                    try:
+                        conn = get_db_connection(db_type)
+                        cur = conn.cursor()
+                        
+                        cur.execute("""
+                            INSERT INTO device_links (device_id, chat_id, telegram_user, linked_at)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (device_id) 
+                            DO UPDATE SET chat_id = EXCLUDED.chat_id, telegram_user = EXCLUDED.telegram_user, linked_at = EXCLUDED.linked_at;
+                        """, (device_id, chat_id, telegram_identifier, time.time()))
+                        
+                        cur.execute("SELECT COUNT(*) FROM device_links;")
+                        res = cur.fetchone()
+                        if res:
+                            total_count = res[0]
+                        
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+                    except Exception as e:
+                        print(f"Link error: {e}")
+
+                    ph_time = datetime.now(timezone(timedelta(hours=8)))
+                    current_time_str = ph_time.strftime("%B %d, %Y — %I:%M %p")
+                    
+                    # Admin Notification
+                    send_register_alert(
+                        f"╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n"
+                        f"┃     ⚠️ 𝗡𝗘𝗪 𝗥𝗘𝗚𝗜𝗦𝗧𝗥𝗔𝗧𝗜𝗢𝗡 𝗔𝗟𝗘𝗥𝗧\n"
+                        f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+                        f"📊 𝗥𝗘𝗚𝗜𝗦𝗧𝗥𝗔𝗧𝗜𝗢𝗡 𝗖𝗢𝗨𝗡𝗧\n"
+                        f"• Total Registrations: {total_count}\n"
+                        f"• New Registration: +1\n\n"
+                        f"👤 𝗨𝗦𝗘𝗥 𝗗𝗘𝗧𝗔𝗜𝗟𝗦\n"
+                        f"• Username: {display_username}\n"
+                        f"• User ID: {user_id}\n\n"
+                        f"📱 𝗗𝗘𝗩𝗜𝗖𝗘 𝗗𝗘𝗧𝗔𝗜𝗟𝗦\n"
+                        f"• Device ID: `{device_id}`\n\n"
+                        f"🕐 𝗥𝗘𝗚𝗜𝗦𝗧𝗥𝗔𝗧𝗜𝗢𝗡 𝗧𝗜𝗠𝗘\n"
+                        f"• {current_time_str}\n\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"✅ 𝗦𝗧𝗔𝗧𝗨𝗦\n"
+                        f"Registration successfully received.\n\n"
+                        f"🤖 𝗔𝗨𝗧𝗢𝗠𝗔𝗧𝗘𝗗 𝗡𝗢𝗧𝗜𝗙𝗜𝗖𝗔𝗧𝗜𝗢𝗡"
+                    )
+                
+                reply_text = (
+                    "╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n"
+                    "┃     ✅ 𝗥𝗘𝗚𝗜𝗦𝗧𝗘𝗥 𝗦𝗨𝗖𝗖𝗘𝗦𝗦‼️\n"
+                    "╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+                    "🎉 Your registration has been completed successfully!\n"
+                    "✨ You're all set and ready to continue.\n\n"
+                    "📱 𝗡𝗘𝗫𝗧 𝗦𝗧𝗘𝗣𝗦 Return to the Codm Injector and tap:\n"
+                    "↻ 𝗖𝗛𝗘𝗖𝗞 𝗦𝗧𝗔𝗧𝗨𝗦\n\n"
+                    "⚠️ 𝗔𝗖𝗧𝗜𝗢𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗\n"
+                    "Please tap CHECK STATUS to confirm your registration\n"
+                    "and continue using the injector.\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "💬 𝗡𝗘𝗘𝗗 𝗛𝗘𝗟𝗣?\n"
+                    "For questions or assistance, contact:\n"
+                    "📩 @KAZEHAYAMODZ"
+                )
+                
+                url = f"https://api.telegram.org/bot{REGISTER_BOT_TOKEN}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": reply_text,
+                }
+                try:
+                    requests.post(url, json=payload, timeout=5)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"Background process error: {e}")
+
 @app.route('/register_webhook', methods=['POST'])
 def register_bot():
     data = request.json
     if not data:
         return "OK", 200
 
-    if "message" in data:
-        msg = data["message"]
-        msg_text = msg.get("text", "")
-        chat_id = msg["chat"]["id"]
-        user_info = msg.get("from", {})
-        
-        username = user_info.get("username")
-        user_id = user_info.get("id")
-        
-        if username:
-            telegram_identifier = f"@{username}"
-            display_username = f"@{username}"
-        else:
-            telegram_identifier = f"tg://openmessage?user_id={user_id}"
-            display_username = f"ID: {user_id}"
-
-        if msg_text.startswith("/start"):
-            parts = msg_text.split(" ")
-            if len(parts) > 1:
-                device_id = parts[1].strip()
-                db_type = 'injector'
-                
-                try:
-                    conn = get_db_connection(db_type)
-                    cur = conn.cursor()
-                    
-                    # I-check muna kung bagong device ba ito o nag-update lang
-                    cur.execute("SELECT 1 FROM device_links WHERE device_id = %s;", (device_id,))
-                    exists = cur.fetchone()
-                    
-                    # I-save o i-update sa database
-                    cur.execute("""
-                        INSERT INTO device_links (device_id, chat_id, telegram_user, linked_at)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (device_id) 
-                        DO UPDATE SET chat_id = EXCLUDED.chat_id, telegram_user = EXCLUDED.telegram_user, linked_at = EXCLUDED.linked_at;
-                    """, (device_id, chat_id, telegram_identifier, time.time()))
-                    
-                    # Kunin ang total count ng mga naka-register
-                    cur.execute("SELECT COUNT(*) FROM device_links;")
-                    total_count = cur.fetchone()[0]
-                    
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                except Exception as e:
-                    print(f"Link error: {e}")
-                    total_count = 1
-
-                ph_time = datetime.now(timezone(timedelta(hours=8)))
-                current_time_str = ph_time.strftime("%B %d, %Y — %I:%M %p")
-                
-
-                # Admin Notification Format
-                send_register_alert(
-                    f"╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n"
-                    f"┃     ⚠️ 𝗡𝗘𝗪 𝗥𝗘𝗚𝗜𝗦𝗧𝗥𝗔𝗧𝗜𝗢𝗡 𝗔𝗟𝗘𝗥𝗧\n"
-                    f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
-                    f"📊 𝗥𝗘𝗚𝗜𝗦𝗧𝗥𝗔𝗧𝗜𝗢𝗡 𝗖𝗢𝗨𝗡𝗧\n"
-                    f"• Total Registrations: {total_count}\n"
-                    f"• New Registration: +1\n\n"
-                    f"👤 𝗨𝗦𝗘𝗥 𝗗𝗘𝗧𝗔𝗜𝗟𝗦\n"
-                    f"• Username: {display_username}\n"
-                    f"• User ID: {user_id}\n\n"
-                    f"📱 𝗗𝗘𝗩𝗜𝗖𝗘 𝗗𝗘𝗧𝗔𝗜𝗟𝗦\n"
-                    f"• Device ID: `{device_id}`\n\n"
-                    f"🕐 𝗥𝗘𝗚𝗜𝗦𝗧𝗥𝗔𝗧𝗜𝗢𝗡 𝗧𝗜𝗠𝗘\n"
-                    f"• {current_time_str}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"✅ 𝗦𝗧𝗔𝗧𝗨𝗦\n"
-                    f"Registration successfully received.\n\n"
-                    f"🤖 𝗔𝗨𝗧𝗢𝗠𝗔𝗧𝗘𝗗 𝗡𝗢𝗧𝗜𝗙𝗜𝗖𝗔𝗧𝗜𝗢𝗡"
-                )
-            
-            # User Success Reply Format
-            reply_text = (
-                "╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n"
-                "┃     ✅ 𝗥𝗘𝗚𝗜𝗦𝗧𝗘𝗥 𝗦𝗨𝗖𝗖𝗘𝗦𝗦‼️\n"
-                "╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
-                "🎉 Your registration has been completed successfully!\n"
-                "✨ You're all set and ready to continue.\n\n"
-                "📱 𝗡𝗘𝗫𝗧 𝗦𝗧𝗘𝗣𝗦 Return to the Codm Injector and tap:\n"
-                "↻ 𝗖𝗛𝗘𝗖𝗞 𝗦𝗧𝗔𝗧𝗨𝗦\n\n"
-                "⚠️ 𝗔𝗖𝗧𝗜𝗢𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗\n"
-                "Please tap CHECK STATUS to confirm your registration\n"
-                "and continue using the injector.\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "💬 𝗡𝗘𝗘𝗗 𝗛𝗘𝗟𝗣?\n"
-                "For questions or assistance, contact:\n"
-                "📩 @KAZEHAYAMODZ"
-            )
-            
-            url = f"https://api.telegram.org/bot{REGISTER_BOT_TOKEN}/sendMessage"
-            payload = {
-                "chat_id": chat_id,
-                "text": reply_text,
-            }
-            try:
-                requests.post(url, json=payload, timeout=5)
-            except Exception:
-                pass
+    # Patakbuhin sa background thread para INSTANT makapag-return ng 200 OK sa Telegram
+    threading.Thread(target=process_telegram_update, args=(data,)).start()
 
     return "OK", 200
 
