@@ -36,7 +36,16 @@ REGISTER_OWNER_ID = "7201369115"
 DB_URL_INJECTOR = os.getenv("DATABASE_URL_INJECTOR") or os.getenv("DATABASE_URL")
 DB_URL_SCRIPT = os.getenv("DATABASE_URL_SCRIPT")
 
-
+@app.route('/refresh_webhook', methods=['GET'])
+def refresh_webhook():
+    render_app_url = "https://server-g16d.onrender.com/register_webhook"
+    url = f"https://api.telegram.org/bot{REGISTER_BOT_TOKEN}/setWebhook?url={render_app_url}"
+    try:
+        response = requests.get(url, timeout=10)
+        return jsonify({"status": "success", "message": "Webhook refreshed successfully", "telegram_response": response.json()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+        
 def get_db_connection(db_type="injector"):
     if db_type == "script":
         url = DB_URL_SCRIPT
